@@ -1,0 +1,19 @@
+{
+  "name": "igv-geoportal-webserver",
+  "version": "1.0.0",
+  "description": "Backend Express do geoportal IGV (Analise de dados - Opcao 2)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

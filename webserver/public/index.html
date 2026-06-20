@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Geoportal analitico do concelho de Viana do Castelo: censos, alojamento local, relevo e analise espacial." />
+  <title>Geoportal Analítico · Viana do Castelo</title>
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='8' fill='%230f1d28'/%3E%3Cg fill='none' stroke='%23e3a857' stroke-width='2.2' stroke-linejoin='round'%3E%3Ccircle cx='24' cy='24' r='13'/%3E%3Cpath d='M24 6v6M24 36v6M6 24h6M36 24h6'/%3E%3C/g%3E%3Ccircle cx='24' cy='24' r='2.6' fill='%23e3a857'/%3E%3C/svg%3E" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+  <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
+  <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/rainbowvis.js@1.1.1/rainbowvis.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="estilos.css" />
+</head>
+
+<body>
+  <header id="topo">
+    <button id="btn-esq" class="icon-btn ativo" title="Mostrar/ocultar painel de camadas" aria-label="Painel de camadas">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+    </button>
+
+    <div class="marca">
+      <svg class="roseta" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="24" cy="24" r="21" stroke-opacity=".4"/>
+        <circle cx="24" cy="24" r="14"/>
+        <path d="M24 3v8M24 37v8M3 24h8M37 24h8" stroke-opacity=".5"/>
+        <path d="m24 8 4 16-4 16-4-16 4-16Z" fill="currentColor" fill-opacity=".15"/>
+        <circle cx="24" cy="24" r="2.4" fill="currentColor" stroke="none"/>
+      </svg>
+      <div class="marca-texto">
+        <span class="t">Geoportal Analítico</span>
+        <span class="s">Viana&nbsp;do&nbsp;Castelo</span>
+      </div>
+    </div>
+
+    <div class="topo-sep" aria-hidden="true"></div>
+
+    <div class="topo-acoes">
+      <button id="btn-medir" class="icon-btn" title="Medir distância no mapa" aria-label="Medir distância">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.3 15.3-6 6a1 1 0 0 1-1.4 0l-12-12a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.4 0l12 12a1 1 0 0 1 0 1.4Z"/><path d="m8 8 1.5 1.5M11 5l1.5 1.5M14 8l1.5 1.5M5 11l1.5 1.5"/></svg>
+      </button>
+      <button id="btn-cheio" class="icon-btn" title="Ecrã inteiro do mapa" aria-label="Ecrã inteiro">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+    </div>
+
+    <div id="estado-ligacao" class="estado" title="Estado da ligação ao servidor">
+      <span class="ponto"></span><span class="txt">a ligar…</span>
+    </div>
+
+    <button id="btn-dir" class="icon-btn ativo" title="Mostrar/ocultar painel de análise" aria-label="Painel de análise">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg>
+    </button>
+  </header>
+
+  <div id="app">
+
+    <aside id="painel-esq" class="painel">
+      <div class="painel-cab">
+        <svg class="icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+        <h2>Camadas</h2>
+      </div>
+
+      <div class="painel-corpo">
+        <section class="bloco">
+          <h3 class="bloco-titulo">Temas</h3>
+          <div id="lista-camadas"><!-- preenchido por JS --></div>
+        </section>
+
+        <section class="bloco">
+          <h3 class="bloco-titulo">Mapa base</h3>
+          <div id="lista-bases" class="bases"><!-- preenchido por JS --></div>
+        </section>
+
+        <section class="bloco">
+          <h3 class="bloco-titulo">Legenda</h3>
+          <div id="legenda" class="legenda"><!-- preenchido por JS --></div>
+        </section>
+      </div>
+    </aside>
+
+    <main id="mapa">
+      <div class="mapa-selo">
+        <svg class="pino" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+        <span class="txt">Concelho de Viana do Castelo</span>
+      </div>
+    </main>
+
+    <aside id="painel-dir" class="painel">
+      <div class="painel-cab">
+        <svg class="icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg>
+        <h2>Análise espacial</h2>
+      </div>
+
+      <nav class="abas" role="tablist" aria-label="Modos de análise">
+        <button class="aba ativa" data-aba="consulta" role="tab" aria-selected="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          Consulta
+        </button>
+        <button class="aba" data-aba="interseccao" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6"/><circle cx="15" cy="15" r="6"/></svg>
+          Interseção
+        </button>
+        <button class="aba" data-aba="criterios" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M7 12h10M11 18h2"/></svg>
+          Critérios
+        </button>
+      </nav>
+
+      <section class="conteudo-aba ativa" id="aba-consulta" role="tabpanel">
+        <p class="ajuda">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Escolhe uma freguesia na lista, ou clica no seu limite no mapa, para ver censos e relevo.</span>
+        </p>
+
+        <label class="campo">
+          <span class="et">Freguesia</span>
+          <span class="seletor com-reset">
+            <select id="select-freguesia" aria-label="Freguesia">
+              <option value="">Escolher freguesia…</option>
+            </select>
+            <button id="btn-limpar-freguesia" class="reset-freg oculto" type="button" title="Limpar seleção de freguesia" aria-label="Limpar seleção de freguesia">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </span>
+        </label>
+
+        <div id="consulta-resultado" class="resultado oculto">
+          <div class="res-cabeca">
+            <span class="nm" id="consulta-nome"></span>
+            <span class="ar" id="consulta-area"></span>
+          </div>
+
+          <div class="cartoes">
+            <div class="cartao"><span class="valor mono" id="kpi-populacao">·</span><span class="rotulo">População</span></div>
+            <div class="cartao"><span class="valor mono" id="kpi-edificios">·</span><span class="rotulo">Edifícios</span></div>
+            <div class="cartao" title="Alojamentos familiares dos Censos 2021 (fogos/habitações). Diferente de Alojamento Local turístico."><span class="valor mono" id="kpi-alojamentos">·</span><span class="rotulo">Aloj. familiares</span></div>
+          </div>
+
+          <h4 class="res-sub">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 20 6-10 4 6 3-4 5 8z"/></svg>
+            Relevo no limite
+          </h4>
+          <div class="cartoes">
+            <div class="cartao mini"><span class="valor mono" id="kpi-cota-max">·</span><span class="rotulo">Máx.</span></div>
+            <div class="cartao mini"><span class="valor mono" id="kpi-cota-min">·</span><span class="rotulo">Mín.</span></div>
+            <div class="cartao mini"><span class="valor mono" id="kpi-cota-media">·</span><span class="rotulo">Média</span></div>
+          </div>
+
+          <h4 class="res-sub">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="13" y="6" width="3" height="11"/></svg>
+            Estrutura etária
+          </h4>
+          <div class="grafico-cx"><canvas id="grafico-etaria" height="160"></canvas></div>
+
+          <button id="btn-ver-dem" class="btn btn-sec largo" style="margin-top:14px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 20 6-10 4 6 3-4 5 8z"/></svg>
+            Ver relevo no mapa
+          </button>
+        </div>
+      </section>
+
+      <section class="conteudo-aba" id="aba-interseccao" role="tabpanel">
+        <p class="ajuda">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Desenha um polígono no mapa para calcular as estatísticas dos temas que o intersectam.</span>
+        </p>
+
+        <div class="botoes">
+          <button id="btn-desenhar-area" class="btn btn-pri">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+            Desenhar área
+          </button>
+          <button id="btn-limpar-area" class="btn btn-fantasma">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            Limpar
+          </button>
+        </div>
+
+        <div id="interseccao-resultado" class="resultado oculto">
+          <div class="cartoes">
+            <div class="cartao"><span class="valor mono" id="ia-area">·</span><span class="rotulo">Área km²</span></div>
+            <div class="cartao"><span class="valor mono" id="ia-populacao">·</span><span class="rotulo">Pop. estim.</span></div>
+            <div class="cartao" title="Registos de Alojamento Local turístico (RNAL) dentro da área. Diferente dos alojamentos familiares dos Censos."><span class="valor mono" id="ia-al">·</span><span class="rotulo">Aloj. local</span></div>
+          </div>
+
+          <h4 class="res-sub">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 20 6-10 4 6 3-4 5 8z"/></svg>
+            Relevo na área
+          </h4>
+          <div class="cartoes">
+            <div class="cartao mini"><span class="valor mono" id="ia-cota-max">·</span><span class="rotulo">Máx.</span></div>
+            <div class="cartao mini"><span class="valor mono" id="ia-cota-min">·</span><span class="rotulo">Mín.</span></div>
+            <div class="cartao mini"><span class="valor mono" id="ia-cota-media">·</span><span class="rotulo">Média</span></div>
+          </div>
+
+          <h4 class="res-sub">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.2 15.9A10 10 0 1 1 8 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+            Alojamento por modalidade
+          </h4>
+          <div class="grafico-cx"><canvas id="grafico-modalidade" height="160"></canvas></div>
+
+          <div class="nota">
+            <span class="k">Freguesias intersectadas</span><br>
+            <span class="v" id="ia-freguesias">·</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="conteudo-aba" id="aba-criterios" role="tabpanel">
+        <p class="ajuda">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Dentro de uma área desenhada, mostra as zonas que cumprem todos os critérios em simultâneo.</span>
+        </p>
+
+        <div class="botoes">
+          <button id="btn-desenhar-area2" class="btn btn-sec">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+            Desenhar área
+          </button>
+          <button id="btn-limpar-area2" class="btn btn-fantasma">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            Limpar
+          </button>
+        </div>
+
+        <div class="divisor">Critérios</div>
+
+        <label class="campo">
+          <span class="et">Cota mínima do terreno <span class="num"><span id="lbl-cota">200</span> m</span></span>
+          <div class="range-linha">
+            <input type="range" id="rng-cota" min="0" max="800" step="10" value="200" aria-label="Cota mínima do terreno" />
+          </div>
+        </label>
+
+        <label class="campo-check">
+          <input type="checkbox" id="chk-al" checked />
+          <span class="caixa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span>
+          <span class="texto">A menos de <strong><span id="lbl-dist">500</span> m</strong> de um Alojamento Local</span>
+        </label>
+
+        <label class="campo">
+          <div class="range-linha">
+            <input type="range" id="rng-dist" min="100" max="2000" step="50" value="500" aria-label="Distância máxima a alojamento local" />
+          </div>
+        </label>
+
+        <button id="btn-executar-eleg" class="btn btn-pri largo" style="margin-top:16px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 3 14 9-14 9V3z"/></svg>
+          Executar análise
+        </button>
+
+        <div id="criterios-resultado" class="resultado oculto">
+          <div class="cartao destaque">
+            <span class="valor mono" id="ce-area">·</span>
+            <span class="rotulo">Área elegível (km²)</span>
+          </div>
+          <button id="btn-exportar" class="btn btn-sec largo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            Exportar resultado (GeoJSON)
+          </button>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <footer id="barra-estado">
+    <div class="be-celula">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span class="et">Lat</span><span class="vl" id="be-lat">·</span>
+      <span class="et">Lng</span><span class="vl" id="be-lng">·</span>
+    </div>
+    <div class="be-celula be-esconde">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span class="et">Zoom</span><span class="vl" id="be-zoom">·</span>
+    </div>
+    <div class="be-celula be-esconde">
+      <span class="et">Escala</span><span class="vl" id="be-escala">·</span>
+    </div>
+    <div class="be-celula be-flex be-esconde">
+      <span class="et">Estado</span><span class="vl" id="be-msg">pronto</span>
+    </div>
+    <div class="be-celula be-crs">
+      <span class="et">CRS</span><span class="vl">WGS&nbsp;84 · EPSG&#58;4326</span>
+    </div>
+  </footer>
+
+  <div id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="config.js"></script>
+  <script src="maps.js"></script>
+  <script>window.addEventListener('load', initApp);</script>
+</body>
+</html>

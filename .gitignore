@@ -1,0 +1,14 @@
+node_modules/
+
+dist/
+
+dados_originais/
+_tmp_dados/
+
+.env
+docker/.env
+webserver/.env
+
+.DS_Store
+Thumbs.db
+*.log

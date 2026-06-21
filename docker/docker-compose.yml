@@ -96,9 +96,33 @@ services:
     volumes:
       - ../webserver:/app
 
+  # ----------------------------------------------------------
+  # pgAdmin
+  # ----------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: igv-pgadmin
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@pgadmin.org
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+
+    ports:
+      - "5050:80"
+
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
 # ==========================================================
 # Volumes persistentes
 # ==========================================================
 volumes:
   pgdata:
   geoserver_data:
+  pgadmin_data:

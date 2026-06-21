@@ -51,9 +51,12 @@ análises por POST.
 Todo o JavaScript foi validado com:
 
 ```bash
+# backend modular (ponto de entrada + camadas em src/)
 node --check webserver/server.js
-node --check webserver/database.js
-# e assim por diante para os restantes ficheiros
+find webserver/src -name '*.js' -exec node --check {} \;
+
+# frontend modular (todos os modulos em public/js/)
+find webserver/public/js -name '*.js' -exec node --check {} \;
 ```
 
 ## O que não foi testado neste ambiente

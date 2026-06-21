@@ -5,8 +5,8 @@ delimitação de uma área com análise espacial sobre dois ou mais temas. O geo
 isso e acrescenta consultas por clique, proximidade e estatísticas. Esta página explica
 cada análise, com a operação PostGIS que a sustenta.
 
-A correspondência entre o que o utilizador faz no mapa, a rota REST e o método de
-`database.js` é a seguinte.
+A correspondência entre o que o utilizador faz no mapa, a rota REST e a função de
+repositório (em `src/repositories/`) é a seguinte.
 
 | Análise | Interação | Rota | Método |
 |---|---|---|---|

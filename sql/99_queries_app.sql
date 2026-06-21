@@ -1,3 +1,4 @@
+-- Freguesias em GeoJSON para consumo direto pelo frontend.
 SELECT jsonb_build_object(
   'type','FeatureCollection',
   'features', jsonb_agg(
@@ -11,6 +12,7 @@ SELECT jsonb_build_object(
 ) AS geojson
 FROM freguesias;
 
+-- Estatísticas de elevação para uma freguesia.
 WITH fr AS (
   SELECT geom FROM freguesias WHERE dtmnfr = '160928'
 )
@@ -27,6 +29,7 @@ LATERAL (
   WHERE ST_Intersects(r.rast, fr.geom)
 ) s;
 
+-- Indicadores censitários agregados por freguesia.
 SELECT
   SUM(n_individuos)            AS populacao,
   SUM(n_individuos_h)          AS homens,
@@ -40,11 +43,13 @@ SELECT
 FROM subseccoes
 WHERE dtmnfr21 = '160928';
 
+-- DEM recortado a uma freguesia, devolvido como TIFF.
 WITH fr AS (SELECT geom FROM freguesias WHERE dtmnfr = '160928')
 SELECT ST_AsTIFF(ST_Union(ST_Clip(r.rast, fr.geom, true))) AS tif
 FROM dem r, fr
 WHERE ST_Intersects(r.rast, fr.geom);
 
+-- Pesquisa de alojamentos locais próximos de um ponto.
 WITH p AS (SELECT ST_Transform(ST_SetSRID(ST_MakePoint(-8.83, 41.69),4326),3763) AS g)
 SELECT al.nrrnal, al.denominacao, al.modalidade,
        round(ST_Distance(al.geom, p.g)::numeric,0) AS dist_m,
@@ -53,6 +58,7 @@ FROM alojamento_local al, p
 WHERE ST_DWithin(al.geom, p.g, 500)
 ORDER BY dist_m;
 
+-- Estatísticas para uma área desenhada pelo utilizador.
 WITH area AS (
   SELECT ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:'area_geojson'),4326),3763) AS g
 ),
@@ -84,6 +90,7 @@ SELECT
   round(((cota.stats).mean)::numeric,1)                  AS cota_media
 FROM cota;
 
+-- Análise de elegibilidade por área, cota mínima e proximidade a alojamento local.
 WITH area AS (
   SELECT ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:'area_geojson'),4326),3763) AS g
 ),
@@ -119,11 +126,13 @@ SELECT
   ST_AsGeoJSON(ST_Transform(g,4326)) AS geojson
 FROM elegivel;
 
+-- Número de subsecções vizinhas de uma subsecção BGRI.
 SELECT count(b.id) AS n_vizinhos
 FROM subseccoes a
 JOIN subseccoes b ON ST_Touches(a.geom, b.geom)
 WHERE a.bgri2021 = '160928XXXXX' AND a.id <> b.id;
 
+-- Buffer de 500 metros em torno de uma subsecção BGRI.
 SELECT ST_AsGeoJSON(ST_Transform(ST_Buffer(geom, 500), 4326)) AS buffer
 FROM subseccoes
 WHERE bgri2021 = '160928XXXXX';

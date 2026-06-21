@@ -2,12 +2,14 @@
 
 set -euo pipefail
 
+# Configuração do GeoServer e do workspace a publicar.
 GS_URL="${GS_URL:-http://localhost:8080/geoserver}"
 GS_USER="${GS_USER:-admin}"
 GS_PASS="${GS_PASS:-geoserver}"
 WS="${WS:-igv}"
 STORE="${STORE:-igv_postgis}"
 
+# Configuração da ligação PostGIS usada pelo GeoServer.
 PG_HOST="${PG_HOST:-db}"
 PG_PORT="${PG_PORT:-5432}"
 PG_DB="${PG_DB:-igv}"
@@ -45,6 +47,7 @@ curl -sS "${AUTH[@]}" "${H_XML[@]}" -X POST \
   "${GS_URL}/rest/workspaces/${WS}/datastores"
 echo
 
+# Publica uma tabela PostGIS como camada vetorial no GeoServer.
 publicar_camada () {
   local tabela="$1"; local titulo="$2"; local srs="EPSG:3763"
   echo ">> publicar camada ${tabela}"
@@ -63,19 +66,21 @@ publicar_camada freguesias       "Freguesias de Viana do Castelo"
 publicar_camada subseccoes       "Subseccoes BGRI 2021"
 publicar_camada alojamento_local "Alojamento Local"
 
+# Carrega ou atualiza um estilo SLD no workspace.
 carregar_estilo () {
   local nome="$1"; local ficheiro="$2"
   echo ">> estilo ${nome}"
-  
+
   curl -sS "${AUTH[@]}" "${H_XML[@]}" -X POST \
     -d "<style><name>${nome}</name><filename>${nome}.sld</filename></style>" \
     "${GS_URL}/rest/workspaces/${WS}/styles" >/dev/null || true
-  # enviar o conteudo SLD
+
   curl -sS "${AUTH[@]}" "${H_SLD[@]}" -X PUT \
     --data-binary "@${ficheiro}" \
     "${GS_URL}/rest/workspaces/${WS}/styles/${nome}"
 }
 
+# Define o estilo principal de uma camada publicada.
 definir_estilo_defeito () {
   local camada="$1"; local estilo="$2"
   curl -sS "${AUTH[@]}" "${H_XML[@]}" -X PUT \

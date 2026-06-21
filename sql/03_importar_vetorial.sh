@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Configuração de ligação ao PostgreSQL/PostGIS.
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5432}"
 PGUSER="${PGUSER:-postgres}"
@@ -15,9 +16,12 @@ PG="PG:host=${PGHOST} port=${PGPORT} user=${PGUSER} password=${PGPASSWORD} dbnam
 echo ">> A importar a partir de: ${GPKG}"
 test -f "${GPKG}" || { echo "ERRO: nao encontrei ${GPKG}"; exit 1; }
 
+# Importa uma camada do GeoPackage para uma tabela PostGIS.
 import_layer () {
   local src_layer="$1"; local dst_table="$2"; local geom_type="$3"
+
   echo ">> ${src_layer} -> ${dst_table} (${geom_type})"
+
   ogr2ogr -f PostgreSQL "${PG}" "${GPKG}" "${src_layer}" \
     -nln "${dst_table}" \
     -nlt "${geom_type}" \
@@ -29,8 +33,8 @@ import_layer () {
 }
 
 import_layer municipios       municipios       MULTIPOLYGON
-import_layer freguesias        freguesias       MULTIPOLYGON
-import_layer subseccoes        subseccoes       MULTIPOLYGON
-import_layer alojamento_local  alojamento_local POINT
+import_layer freguesias       freguesias       MULTIPOLYGON
+import_layer subseccoes       subseccoes       MULTIPOLYGON
+import_layer alojamento_local alojamento_local POINT
 
 echo ">> Importacao vetorial concluida."

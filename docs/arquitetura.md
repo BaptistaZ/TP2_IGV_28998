@@ -40,6 +40,52 @@ resultado já em EPSG:4326 (GeoJSON), ou imagens GeoTIFF no caso do relevo recor
 **Leaflet** desenha os mapas base, os overlays e os resultados das análises, gere o controlo
 de camadas e o desenho/medição de áreas.
 
+## Organização do código
+
+O backend está separado por camadas dentro de `webserver/src/`, com o `server.js`
+reduzido ao arranque da aplicação (monta middleware e rotas).
+
+```
+webserver/
+  server.js              ponto de entrada (middleware, rotas, arranque)
+  src/
+    config/env.js        configuracao a partir de variaveis de ambiente
+    db/pool.js           pool pg + helpers de consulta (inclui modo GDAL)
+    repositories/        SQL por dominio (freguesias, censos, alojamento, dem, analise)
+    controllers/         validacao de entrada e resposta HTTP
+    routes/              definicao dos endpoints (agregados em routes/index.js)
+    middleware/          tratamento de erros e 404 da API
+    validators/          validacoes reutilizaveis
+    utils/               auxiliares (numeros, elevacao)
+```
+
+O fluxo de um pedido é `routes → controllers → repositories → db/pool`. Os
+controllers validam a entrada e tratam a resposta; os repositories contêm o SQL e
+devolvem dados já em EPSG:4326.
+
+O frontend está dividido por responsabilidade em `webserver/public/js/`. São
+scripts clássicos carregados por ordem no `index.html`, que partilham o mesmo
+âmbito global: o estado vive em `state/state.js` e o arranque em `app.js`.
+
+```
+public/
+  index.html
+  css/estilos.css
+  js/
+    config/     CONFIG (endpoints da API e do GeoServer)
+    state/      estado global e constantes visuais
+    api/        acesso a API (GET/POST JSON)
+    map/        mapa base e barra de estado
+    styles/     estilos das feicoes de freguesia
+    layers/     freguesias, overlays, relevo, declive, coropleta
+    panels/     clique-info, consulta e abas
+    analysis/   desenho, medicao, perfil, proximidade, intersecao, criterios, comparacao
+    charts/     tema dos graficos
+    templates/  legenda
+    ui/         botoes, toasts, indicador de ligacao
+    utils/      DOM e formatacao
+```
+
 ## Porquê duas vias para os dados (backend e GeoServer)
 
 As camadas de **freguesias** e **alojamento local** são servidas pelo backend em GeoJSON.

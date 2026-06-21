@@ -53,7 +53,11 @@ async function initApp() {
   ligarAbas();
   ligarControlosCriterios();
   ligarBotoesAnalise();
-  ligarChrome();          
+  ligarChrome();
+  ligarFerramentasMapa();   // medir área + perfil de elevação
+  ligarProximidade();       // alojamentos mais próximos + buffer
+  ligarComparar();          // comparador de freguesias
+  ligarCoropleta();         // coropleta configurável
 
   await verificarLigacao();
   await carregarFreguesias();
@@ -168,6 +172,11 @@ function criarDesenhoEMedicao() {
 
   map.on(L.Draw.Event.CREATED, (e) => {
     const layer = e.layer;
+    if (tipoDesenho === 'medir') {     // veio do botão "medir área"
+      aoCriarAreaMedida(layer);
+      desligarMedicaoArea();
+      return;
+    }
     if (e.layerType === 'polygon' || e.layerType === 'rectangle') {
       limparAreasPoligono();         // so mantemos uma area de analise de cada vez
       drawnItems.addLayer(layer);
@@ -176,6 +185,8 @@ function criarDesenhoEMedicao() {
     }
   });
 }
+
+let tipoDesenho = null; // 'analise' | 'medir' (qual o destino do próximo polígono)
 
 function formatarDistancia(metros) {
   return metros >= 1000 ? `${(metros / 1000).toFixed(2)} km` : `${Math.round(metros)} m`;
@@ -191,7 +202,10 @@ let desenhoAreaAtivo = null;
 function iniciarDesenhoArea() {
   garantirPainelDir(); // o resultado aparece no painel direito
   if (medicaoAtiva) cancelarMedicao();
+  if (perfilAtivo) cancelarPerfil();
+  if (areaMedicaoAtiva) cancelarMedicaoArea();
   if (desenhoAreaAtivo) desenhoAreaAtivo.disable();
+  tipoDesenho = 'analise';
   desenhoAreaAtivo = new L.Draw.Polygon(map, drawControl.options.draw.polygon);
   desenhoAreaAtivo.enable();
   toast('Clica no mapa para desenhar a área. Duplo clique termina, Esc cancela.', 'info', 5000);
@@ -402,7 +416,7 @@ async function carregarFreguesias() {
       onEachFeature: (feature, layer) => {
         layer.on('click', (e) => onCliqueFreguesia(e, feature, layer));
         layer.on('mouseover', () => { if (freguesiaAtiva?.layer !== layer) layer.setStyle(estiloFreguesiaHover()); });
-        layer.on('mouseout',  () => { if (freguesiaAtiva?.layer !== layer) layer.setStyle(estiloFreguesia()); });
+        layer.on('mouseout',  () => { if (freguesiaAtiva?.layer !== layer) layer.setStyle(estiloRepousoFreguesia(layer)); });
       },
     });
     popularSelectFreguesias(geojson);
@@ -418,6 +432,21 @@ function estiloFreguesia()      { return { color: '#6ea8e6', weight: 1.1, fillCo
 function estiloFreguesiaHover() { return { color: '#9bc2f0', weight: 1.8, fillColor: '#6ea8e6', fillOpacity: 0.12 }; }
 function estiloFreguesiaAtiva() { return { color: '#e3a857', weight: 2.6, fillColor: '#e3a857', fillOpacity: 0.14 }; }
 
+// Estilo de repouso de uma freguesia: mantém a cor da coropleta se estiver ativa.
+function estiloRepousoFreguesia(layer) {
+  if (coropletaAtiva && coropletaQuebras && indicadoresCache) {
+    const dt = layer?.feature?.properties?.dtmnfr;
+    const reg = indicadoresCache.find((d) => d.dtmnfr === dt);
+    if (reg) {
+      const cor = corDaClasse(Number(reg[coropletaAtiva]), coropletaQuebras);
+      return { color: '#1c3242', weight: 1, fillColor: cor, fillOpacity: 0.78 };
+    }
+  }
+  return estiloFreguesia();
+}
+
+let listaFreguesias = [];
+
 function popularSelectFreguesias(geojson) {
   const sel = document.getElementById('select-freguesia');
   const feats = (geojson.features || [])
@@ -429,6 +458,17 @@ function popularSelectFreguesias(geojson) {
     opt.textContent = p.freguesia;
     sel.appendChild(opt);
   });
+
+  listaFreguesias = feats.map((p) => ({ dtmnfr: p.dtmnfr, freguesia: p.freguesia }));
+  const selCmp = document.getElementById('comparar-add');
+  if (selCmp) {
+    feats.forEach((p) => {
+      const o = document.createElement('option');
+      o.value = p.dtmnfr; o.textContent = p.freguesia;
+      selCmp.appendChild(o);
+    });
+  }
+
   sel.addEventListener('change', () => {
     dtmnfrSelecionada = sel.value || null;
     if (dtmnfrSelecionada) {
@@ -449,7 +489,7 @@ function popularSelectFreguesias(geojson) {
 
 function limparSelecaoFreguesia() {
   dtmnfrSelecionada = null;
-  if (freguesiaAtiva?.layer) freguesiaAtiva.layer.setStyle(estiloFreguesia());
+  if (freguesiaAtiva?.layer) freguesiaAtiva.layer.setStyle(estiloRepousoFreguesia(freguesiaAtiva.layer));
   freguesiaAtiva = null;
   if (freguesiaDemLayer) { map.removeLayer(freguesiaDemLayer); freguesiaDemLayer = null; }
   esconder('consulta-resultado');
@@ -466,7 +506,7 @@ function marcarFreguesiaEscolhida(ha) {
 function onCliqueFreguesia(e, feature, layer) {
   if (medicaoAtiva) return; 
   L.DomEvent.stopPropagation(e); 
-  if (freguesiaAtiva?.layer) freguesiaAtiva.layer.setStyle(estiloFreguesia());
+  if (freguesiaAtiva?.layer) freguesiaAtiva.layer.setStyle(estiloRepousoFreguesia(freguesiaAtiva.layer));
   layer.setStyle(estiloFreguesiaAtiva());
   freguesiaAtiva = { dtmnfr: feature.properties.dtmnfr, layer };
 
@@ -519,8 +559,12 @@ async function criarCamadaDEM() {
   });
 }
 
+let modoClique = 'info'; // 'info' | 'knn' | 'buffer'
+
 async function onCliqueMapa(e) {
-  if (medicaoAtiva) return; // durante a medição o clique marca pontos
+  if (medicaoAtiva || perfilAtivo) return; // medição e perfil usam o clique
+  if (modoClique === 'knn')    { executarKnn(e.latlng); return; }
+  if (modoClique === 'buffer') { executarBuffer(e.latlng); return; }
   try {
     const { lat, lng } = e.latlng;
     const aberto = L.popup({ className: 'pop-carga' })
@@ -570,7 +614,7 @@ async function consultarFreguesia(dtmnfr) {
     if (camadaFreguesias) {
       camadaFreguesias.eachLayer((l) => {
         if (l.feature?.properties?.dtmnfr === dtmnfr) {
-          if (freguesiaAtiva?.layer && freguesiaAtiva.layer !== l) freguesiaAtiva.layer.setStyle(estiloFreguesia());
+          if (freguesiaAtiva?.layer && freguesiaAtiva.layer !== l) freguesiaAtiva.layer.setStyle(estiloRepousoFreguesia(freguesiaAtiva.layer));
           l.setStyle(estiloFreguesiaAtiva());
           freguesiaAtiva = { dtmnfr, layer: l };
           map.fitBounds(l.getBounds(), { padding: [30, 30] });
@@ -703,6 +747,10 @@ function ligarControlosCriterios() {
   const rngDist = document.getElementById('rng-dist');
   const lblDist = document.getElementById('lbl-dist');
   rngDist.addEventListener('input', () => (lblDist.textContent = rngDist.value));
+
+  const rngDeclive = document.getElementById('rng-declive');
+  const lblDeclive = document.getElementById('lbl-declive');
+  if (rngDeclive) rngDeclive.addEventListener('input', () => (lblDeclive.textContent = rngDeclive.value));
 }
 
 async function executarElegibilidade() {
@@ -710,6 +758,8 @@ async function executarElegibilidade() {
   const cotaMin = parseFloat(document.getElementById('rng-cota').value);
   const distAl = parseFloat(document.getElementById('rng-dist').value);
   const usarAl = document.getElementById('chk-al').checked;
+  const decliveMax = parseFloat(document.getElementById('rng-declive').value);
+  const usarDeclive = document.getElementById('chk-declive').checked;
   const btn = document.getElementById('btn-executar-eleg');
 
   try {
@@ -717,6 +767,7 @@ async function executarElegibilidade() {
     estadoBarra('a executar elegibilidade…');
     const r = await postJSON(`${CONFIG.API}/analise/elegivel`, {
       geometry: areaDesenhada, cota_min: cotaMin, dist_al: distAl, usar_al: usarAl,
+      declive_max: decliveMax, usar_declive: usarDeclive,
     });
 
     txt('ce-area', r.area_km2_elegivel != null ? Number(r.area_km2_elegivel).toFixed(3) : '0');
@@ -760,6 +811,591 @@ function exportarElegivel() {
   toast('GeoJSON exportado.', 'ok');
 }
 
+// =====================================================================
+// FERRAMENTAS DE MAPA: medir area e perfil de elevacao
+// =====================================================================
+
+function ligarFerramentasMapa() {
+  document.getElementById('btn-medir-area').addEventListener('click', () => {
+    if (areaMedicaoAtiva) { cancelarMedicaoArea(); return; }
+    if (camadaAreaMedida) { limparMedicaoArea(); estadoBarra('pronto'); return; }
+    iniciarMedicaoArea();
+  });
+  document.getElementById('btn-perfil').addEventListener('click', () => {
+    if (perfilAtivo) { cancelarPerfil(); return; }
+    iniciarPerfil();
+  });
+}
+
+// ---- Medir area (poligono, area geodesica) ----
+let areaMedicaoAtiva = false;
+let areaMedHandler = null;
+let camadaAreaMedida = null;
+
+function iniciarMedicaoArea() {
+  if (medicaoAtiva) cancelarMedicao();
+  if (perfilAtivo) cancelarPerfil();
+  if (modoClique !== 'info') activarModoClique('info');
+  areaMedicaoAtiva = true;
+  tipoDesenho = 'medir';
+  document.getElementById('btn-medir-area').classList.add('ativo');
+  estadoBarra('medicao de area ativa');
+  areaMedHandler = new L.Draw.Polygon(map, {
+    allowIntersection: false, showArea: true,
+    shapeOptions: { color: '#58c4c4', weight: 2, fillColor: '#58c4c4', fillOpacity: 0.12 },
+    metric: true,
+  });
+  areaMedHandler.enable();
+  toast('Desenha o polígono. Duplo clique fecha, Esc cancela.', 'info', 4500);
+}
+
+function aoCriarAreaMedida(layer) {
+  if (camadaAreaMedida) map.removeLayer(camadaAreaMedida);
+  camadaAreaMedida = layer;
+  layer.addTo(map);
+  const latlngs = layer.getLatLngs()[0];
+  const area = areaGeodesica(latlngs); // m2
+  const perimetro = perimetroLatLngs(latlngs);
+  const txtArea = area >= 1e6 ? `${(area / 1e6).toFixed(3)} km²` : `${Math.round(area).toLocaleString('pt-PT')} m²`;
+  const ha = area / 1e4;
+  layer.bindTooltip(
+    `<b>Área:</b> ${txtArea}<br><b>${ha.toFixed(2)} ha</b><br><b>Perímetro:</b> ${formatarDistancia(perimetro)}`,
+    { permanent: true, direction: 'center', className: 'tt-medicao fixa' }
+  ).openTooltip();
+  toast(`Área medida: ${txtArea}. Carrega no botão para limpar.`, 'ok', 5000);
+}
+
+function perimetroLatLngs(latlngs) {
+  let p = 0;
+  for (let i = 0; i < latlngs.length; i++) p += latlngs[i].distanceTo(latlngs[(i + 1) % latlngs.length]);
+  return p;
+}
+
+// Área geodésica em m². Usa o leaflet-draw quando disponível; senão, fórmula esférica.
+function areaGeodesica(latlngs) {
+  if (window.L && L.GeometryUtil && typeof L.GeometryUtil.geodesicArea === 'function') {
+    return Math.abs(L.GeometryUtil.geodesicArea(latlngs));
+  }
+  const R = 6378137, rad = (d) => (d * Math.PI) / 180, n = latlngs.length;
+  if (n < 3) return 0;
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const p1 = latlngs[i], p2 = latlngs[(i + 1) % n];
+    area += rad(p2.lng - p1.lng) * (2 + Math.sin(rad(p1.lat)) + Math.sin(rad(p2.lat)));
+  }
+  return Math.abs((area * R * R) / 2);
+}
+
+function desligarMedicaoArea() {
+  areaMedicaoAtiva = false;
+  document.getElementById('btn-medir-area').classList.remove('ativo');
+  if (areaMedHandler) { areaMedHandler.disable(); areaMedHandler = null; }
+  estadoBarra('pronto');
+}
+
+function cancelarMedicaoArea() { desligarMedicaoArea(); limparMedicaoArea(); }
+function limparMedicaoArea() { if (camadaAreaMedida) { map.removeLayer(camadaAreaMedida); camadaAreaMedida = null; } }
+
+// ---- Perfil de elevacao ----
+let perfilAtivo = false;
+let perfilPontos = [];
+let perfilLinha = null;
+let perfilFantasma = null;
+let perfilMarcadores = null;
+let chartPerfil = null;
+let perfilDlg = null;
+
+function iniciarPerfil() {
+  if (medicaoAtiva) cancelarMedicao();
+  if (areaMedicaoAtiva) cancelarMedicaoArea();
+  if (modoClique !== 'info') activarModoClique('info');
+  perfilAtivo = true;
+  perfilPontos = [];
+  perfilMarcadores = L.featureGroup().addTo(map);
+  perfilLinha = L.polyline([], { color: '#e3a857', weight: 3, opacity: 0.95 }).addTo(map);
+  document.getElementById('btn-perfil').classList.add('ativo');
+  L.DomUtil.addClass(map.getContainer(), 'a-medir');
+  map.doubleClickZoom.disable();
+  map.on('click', perfilAddPonto);
+  map.on('mousemove', perfilMove);
+  map.on('dblclick', perfilTerminarDbl);
+  estadoBarra('perfil: a desenhar linha');
+  toast('Clica para traçar a linha. Duplo clique termina, Esc cancela.', 'info', 4800);
+}
+
+function perfilAddPonto(e) {
+  perfilPontos.push(e.latlng);
+  perfilLinha.setLatLngs(perfilPontos);
+  L.circleMarker(e.latlng, { radius: 3, color: '#0b1620', weight: 1.4, fillColor: '#e3a857', fillOpacity: 1 }).addTo(perfilMarcadores);
+}
+
+function perfilMove(e) {
+  if (!perfilAtivo || perfilPontos.length === 0) return;
+  const ult = perfilPontos[perfilPontos.length - 1];
+  if (perfilFantasma) perfilFantasma.setLatLngs([ult, e.latlng]);
+  else perfilFantasma = L.polyline([ult, e.latlng], { color: '#e3a857', weight: 1.5, opacity: 0.5, dashArray: '3,6' }).addTo(map);
+}
+
+function perfilTerminarDbl(e) {
+  if (e?.originalEvent) L.DomEvent.stop(e.originalEvent);
+  terminarPerfil();
+}
+
+function desligarPerfilEventos() {
+  map.off('click', perfilAddPonto);
+  map.off('mousemove', perfilMove);
+  map.off('dblclick', perfilTerminarDbl);
+  setTimeout(() => map.doubleClickZoom.enable(), 300);
+  document.getElementById('btn-perfil').classList.remove('ativo');
+  L.DomUtil.removeClass(map.getContainer(), 'a-medir');
+  if (perfilFantasma) { map.removeLayer(perfilFantasma); perfilFantasma = null; }
+}
+
+async function terminarPerfil() {
+  if (!perfilAtivo) return;
+  perfilAtivo = false;
+  desligarPerfilEventos();
+  if (perfilPontos.length < 2) {
+    limparPerfil();
+    toast('Perfil cancelado. São precisos pelo menos dois pontos.', 'info');
+    estadoBarra('pronto');
+    return;
+  }
+  const geometry = { type: 'LineString', coordinates: perfilPontos.map((p) => [p.lng, p.lat]) };
+  try {
+    estadoBarra('a amostrar o relevo…');
+    const r = await postJSON(`${CONFIG.API}/perfil-elevacao`, { geometry, n: 140 });
+    mostrarPerfil(r);
+    estadoBarra('pronto');
+  } catch (err) {
+    console.error('Erro no perfil de elevação', err);
+    estadoBarra('erro no perfil');
+    toast(`Não foi possível obter o perfil: ${err.message}`, 'erro', 6000);
+  }
+}
+
+function cancelarPerfil() {
+  perfilAtivo = false;
+  desligarPerfilEventos();
+  limparPerfil();
+  estadoBarra('pronto');
+}
+
+function limparPerfil() {
+  [perfilLinha, perfilFantasma, perfilMarcadores].forEach((l) => { if (l && map.hasLayer(l)) map.removeLayer(l); });
+  perfilLinha = perfilFantasma = perfilMarcadores = null;
+  perfilPontos = [];
+}
+
+function mostrarPerfil(r) {
+  if (!perfilDlg) {
+    perfilDlg = document.createElement('div');
+    perfilDlg.id = 'perfil-dlg';
+    perfilDlg.className = 'perfil-dlg';
+    perfilDlg.innerHTML =
+      `<div class="perfil-cab"><span class="t">Perfil de elevação</span>` +
+      `<button class="perfil-fechar" aria-label="Fechar">${ICO.fechar}</button></div>` +
+      `<div class="perfil-stats" id="perfil-stats"></div>` +
+      `<div class="perfil-grafico"><canvas id="grafico-perfil"></canvas></div>`;
+    document.getElementById('mapa').appendChild(perfilDlg);
+    perfilDlg.querySelector('.perfil-fechar').addEventListener('click', fecharPerfil);
+  }
+  perfilDlg.classList.remove('oculto');
+
+  document.getElementById('perfil-stats').innerHTML =
+    `<span><b>${formatarDistancia(r.comprimento_m)}</b> percurso</span>` +
+    `<span><b>${r.cota_min ?? '·'}</b> – <b>${r.cota_max ?? '·'} m</b></span>` +
+    `<span><b>${r.ganho_m ?? '·'} m</b> de subida</span>`;
+
+  const ctx = document.getElementById('grafico-perfil');
+  if (chartPerfil) chartPerfil.destroy();
+  chartPerfil = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: r.pontos.map((p) => Math.round(p.dist)),
+      datasets: [{
+        label: 'Cota (m)', data: r.pontos.map((p) => p.cota),
+        borderColor: '#e3a857', backgroundColor: 'rgba(227,168,87,.18)',
+        fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2, spanGaps: true,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: tooltipTema() },
+      scales: {
+        x: { title: { display: true, text: 'distância (m)', color: COR.nevoa, font: { size: 10 } },
+             grid: { color: COR.linha }, ticks: { color: COR.bruma, maxTicksLimit: 7, font: { family: 'JetBrains Mono', size: 10 } } },
+        y: { title: { display: true, text: 'cota (m)', color: COR.nevoa, font: { size: 10 } },
+             grid: { color: COR.linha }, ticks: { color: COR.bruma, font: { family: 'JetBrains Mono', size: 10 } } },
+      },
+    },
+  });
+}
+
+function fecharPerfil() {
+  if (perfilDlg) perfilDlg.classList.add('oculto');
+  limparPerfil();
+}
+
+// =====================================================================
+// PROXIMIDADE: alojamentos mais proximos (KNN) e area de influencia
+// =====================================================================
+
+let knnCamada = null;
+let bufferCamada = null;
+
+function ligarProximidade() {
+  document.getElementById('rng-knn').addEventListener('input', (e) => txt('lbl-knn', e.target.value));
+  document.getElementById('rng-raio').addEventListener('input', (e) => txt('lbl-raio', e.target.value));
+  document.getElementById('btn-knn').addEventListener('click', () => activarModoClique(modoClique === 'knn' ? 'info' : 'knn'));
+  document.getElementById('btn-buffer').addEventListener('click', () => activarModoClique(modoClique === 'buffer' ? 'info' : 'buffer'));
+}
+
+function activarModoClique(novo) {
+  modoClique = novo;
+  document.getElementById('btn-knn').classList.toggle('ativo', novo === 'knn');
+  document.getElementById('btn-buffer').classList.toggle('ativo', novo === 'buffer');
+  if (novo === 'info') {
+    L.DomUtil.removeClass(map.getContainer(), 'a-clicar');
+    estadoBarra('pronto');
+  } else {
+    if (medicaoAtiva) cancelarMedicao();
+    if (perfilAtivo) cancelarPerfil();
+    if (areaMedicaoAtiva) cancelarMedicaoArea();
+    L.DomUtil.addClass(map.getContainer(), 'a-clicar');
+    estadoBarra(novo === 'knn' ? 'clica para encontrar os mais próximos' : 'clica para definir o centro do raio');
+    toast('Clica num ponto do mapa.', 'info', 3000);
+  }
+}
+
+async function executarKnn(latlng) {
+  const n = parseInt(document.getElementById('rng-knn').value, 10);
+  try {
+    estadoBarra('a procurar mais próximos…');
+    const lista = await pedirJSON(`${CONFIG.API}/al/mais-proximos?lat=${latlng.lat}&lng=${latlng.lng}&n=${n}`);
+    if (knnCamada) map.removeLayer(knnCamada);
+    knnCamada = L.featureGroup().addTo(map);
+    L.circleMarker(latlng, { radius: 6, color: '#0b1620', weight: 2, fillColor: '#e3a857', fillOpacity: 1 }).addTo(knnCamada);
+    lista.forEach((al, i) => {
+      const pt = L.latLng(al.lat, al.lon);
+      L.polyline([latlng, pt], { color: '#58c4c4', weight: 1.4, opacity: 0.7, dashArray: '4,5' }).addTo(knnCamada);
+      L.circleMarker(pt, { radius: 5, color: '#0b1620', weight: 1.5, fillColor: corModalidade(al.modalidade), fillOpacity: 0.95 })
+        .bindTooltip(`${i + 1}. ${escaparHtml(al.denominacao || 'AL')} · ${formatarDistancia(al.dist_m)}`, { direction: 'top' })
+        .addTo(knnCamada);
+    });
+    if (knnCamada.getBounds().isValid()) map.fitBounds(knnCamada.getBounds(), { padding: [40, 40] });
+    document.getElementById('knn-lista').innerHTML = lista.length ? lista.map((al, i) =>
+      `<div class="prox-item"><span class="n">${i + 1}</span>` +
+      `<span class="d"><span class="nm">${escaparHtml(al.denominacao || 'Alojamento Local')}</span>` +
+      `<span class="sb">${escaparHtml(al.freguesia || '')}</span></span>` +
+      `<span class="m mono">${formatarDistancia(al.dist_m)}</span></div>`
+    ).join('') : '<div class="prox-vazio">Sem alojamentos.</div>';
+    mostrar('knn-resultado', true);
+    garantirPainelDir(); ativarAba('proximidade');
+    estadoBarra('pronto');
+  } catch (err) {
+    console.error('Erro no KNN', err);
+    estadoBarra('erro na procura');
+    toast(`Não foi possível encontrar os mais próximos: ${err.message}`, 'erro', 6000);
+  }
+}
+
+async function executarBuffer(latlng) {
+  const raio = parseInt(document.getElementById('rng-raio').value, 10);
+  try {
+    estadoBarra('a calcular área de influência…');
+    const r = await pedirJSON(`${CONFIG.API}/al/proximos?lat=${latlng.lat}&lng=${latlng.lng}&raio=${raio}`);
+    if (bufferCamada) map.removeLayer(bufferCamada);
+    bufferCamada = L.featureGroup().addTo(map);
+    L.circle(latlng, { radius: raio, color: '#e3a857', weight: 1.6, fillColor: '#e3a857', fillOpacity: 0.08 }).addTo(bufferCamada);
+    L.circleMarker(latlng, { radius: 5, color: '#0b1620', weight: 2, fillColor: '#e3a857', fillOpacity: 1 }).addTo(bufferCamada);
+    const feats = (r.geojson && r.geojson.features) || [];
+    feats.forEach((f) => {
+      const c = f.geometry.coordinates;
+      L.circleMarker([c[1], c[0]], { radius: 4.5, color: '#0b1620', weight: 1.4, fillColor: corModalidade(f.properties.modalidade), fillOpacity: 0.95 })
+        .bindTooltip(`${escaparHtml(f.properties.denominacao || 'AL')} · ${f.properties.dist_m} m`, { direction: 'top' })
+        .addTo(bufferCamada);
+    });
+    if (bufferCamada.getBounds().isValid()) map.fitBounds(bufferCamada.getBounds(), { padding: [30, 30] });
+    txt('buffer-conta', formatarNumero(r.total || 0));
+    document.getElementById('buffer-lista').innerHTML = feats.length
+      ? feats.map((f) =>
+          `<div class="prox-item"><span class="p" style="background:${corModalidade(f.properties.modalidade)}"></span>` +
+          `<span class="d"><span class="nm">${escaparHtml(f.properties.denominacao || 'Alojamento Local')}</span>` +
+          `<span class="sb">${escaparHtml(f.properties.modalidade || '')}</span></span>` +
+          `<span class="m mono">${f.properties.dist_m} m</span></div>`
+        ).join('')
+      : '<div class="prox-vazio">Nenhum alojamento local neste raio.</div>';
+    mostrar('buffer-resultado', true);
+    garantirPainelDir(); ativarAba('proximidade');
+    estadoBarra('pronto');
+  } catch (err) {
+    console.error('Erro no buffer', err);
+    estadoBarra('erro na área de influência');
+    toast(`Não foi possível calcular a área de influência: ${err.message}`, 'erro', 6000);
+  }
+}
+
+// =====================================================================
+// DECLIVE de uma freguesia (derivado do DEM)
+// =====================================================================
+
+async function verDecliveFreguesia() {
+  if (!dtmnfrSelecionada) { toast('Escolhe primeiro uma freguesia.', 'info'); return; }
+  const btn = document.getElementById('btn-ver-declive');
+  try {
+    carregarBotao(btn, true, 'A calcular declive…');
+    estadoBarra('a calcular declive…');
+    pedirJSON(`${CONFIG.API}/freguesias/${dtmnfrSelecionada}/declive`)
+      .then((s) => {
+        txt('kpi-declive-max', s.declive_max != null ? s.declive_max + '°' : '·');
+        txt('kpi-declive-media', s.declive_media != null ? s.declive_media + '°' : '·');
+        mostrar('declive-stats', true);
+      }).catch(() => {});
+
+    const resp = await fetch(`${CONFIG.API}/freguesias/${dtmnfrSelecionada}/declive.tif`);
+    if (!resp.ok) {
+      let detalhe = '';
+      try { detalhe = (await resp.json()).detalhe || (await resp.json()).erro || ''; } catch (_) {}
+      throw new Error(detalhe || `Declive indisponível (${resp.status})`);
+    }
+    const buffer = await resp.arrayBuffer();
+    const georaster = await parseGeoraster(buffer);
+    const rainbow = new Rainbow();
+    rainbow.setNumberRange(0, 45);
+    rainbow.setSpectrum('#1a9850', '#a6d96a', '#fee08b', '#f46d43', '#a50026');
+
+    if (freguesiaDemLayer) { map.removeLayer(freguesiaDemLayer); freguesiaDemLayer = null; }
+    freguesiaDemLayer = new GeoRasterLayer({
+      georaster, opacity: 0.85, resolution: 256,
+      pixelValuesToColorFn: (vals) => {
+        const v = vals[0];
+        if (v === null || v === undefined || v < 0) return null;
+        return '#' + rainbow.colourAt(Math.min(45, Math.round(v)));
+      },
+    });
+    freguesiaDemLayer.addTo(map);
+    if (freguesiaDemLayer.getBounds) map.fitBounds(freguesiaDemLayer.getBounds(), { padding: [30, 30] });
+    estadoBarra('pronto');
+    toast('Declive carregado (verde = plano, vermelho = íngreme).', 'ok', 5000);
+  } catch (err) {
+    console.error('Erro ao carregar declive', err);
+    estadoBarra('erro no declive');
+    toast(`Não foi possível carregar o declive: ${err.message}`, 'erro', 6000);
+  } finally {
+    carregarBotao(btn, false);
+  }
+}
+
+// =====================================================================
+// COROPLETA configuravel das freguesias
+// =====================================================================
+
+let indicadoresCache = null;
+let coropletaAtiva = null;
+let coropletaQuebras = null;
+
+const COROPLETA_INFO = {
+  populacao:   { titulo: 'População',                     sufixo: '' },
+  densidade:   { titulo: 'Densidade (hab/km²)',           sufixo: '' },
+  idosos_pct:  { titulo: 'Índice de envelhecimento (%)',  sufixo: '%' },
+  edificios:   { titulo: 'Edifícios',                     sufixo: '' },
+  alojamentos: { titulo: 'Alojamentos familiares',        sufixo: '' },
+};
+const COROPLETA_CORES = ['#f1eef6', '#bdc9e1', '#74a9cf', '#2b8cbe', '#045a8d'];
+
+function ligarCoropleta() {
+  const sel = document.getElementById('select-coropleta');
+  if (sel) sel.addEventListener('change', () => aplicarCoropleta(sel.value));
+}
+
+async function aplicarCoropleta(variavel) {
+  if (!variavel) { limparCoropleta(); return; }
+  try {
+    if (!indicadoresCache) {
+      estadoBarra('a carregar indicadores…');
+      indicadoresCache = await pedirJSON(`${CONFIG.API}/indicadores`);
+      estadoBarra('pronto');
+    }
+    coropletaAtiva = variavel;
+    const valores = indicadoresCache.map((d) => Number(d[variavel])).filter((v) => Number.isFinite(v));
+    const quebras = quantis(valores, 5);
+    coropletaQuebras = quebras;
+    const porDtmnfr = {};
+    indicadoresCache.forEach((d) => { porDtmnfr[d.dtmnfr] = Number(d[variavel]); });
+    if (camadaFreguesias) {
+      camadaFreguesias.eachLayer((l) => {
+        if (freguesiaAtiva?.layer === l) return;
+        const cor = corDaClasse(porDtmnfr[l.feature?.properties?.dtmnfr], quebras);
+        l.setStyle({ color: '#1c3242', weight: 1, fillColor: cor, fillOpacity: 0.78 });
+      });
+      camadaFreguesias.bringToFront();
+    }
+    renderCoropletaLegenda(variavel, quebras);
+  } catch (err) {
+    console.error('Erro na coropleta', err);
+    toast(`Não foi possível aplicar a coropleta: ${err.message}`, 'erro');
+  }
+}
+
+function limparCoropleta() {
+  coropletaAtiva = null;
+  coropletaQuebras = null;
+  if (camadaFreguesias) camadaFreguesias.eachLayer((l) => { if (freguesiaAtiva?.layer !== l) l.setStyle(estiloFreguesia()); });
+  const leg = document.getElementById('coropleta-legenda');
+  if (leg) { leg.classList.add('oculto'); leg.innerHTML = ''; }
+}
+
+function quantis(valores, n) {
+  const ord = [...valores].sort((a, b) => a - b);
+  if (ord.length === 0) return [0, 0, 0, 0];
+  const q = [];
+  for (let i = 1; i < n; i++) {
+    const pos = (ord.length - 1) * (i / n);
+    const base = Math.floor(pos);
+    const resto = pos - base;
+    q.push(ord[base] + (ord[Math.min(base + 1, ord.length - 1)] - ord[base]) * resto);
+  }
+  return q;
+}
+
+function corDaClasse(v, quebras) {
+  if (!Number.isFinite(v)) return '#26323b';
+  let i = 0;
+  while (i < quebras.length && v > quebras[i]) i++;
+  return COROPLETA_CORES[Math.min(i, COROPLETA_CORES.length - 1)];
+}
+
+function renderCoropletaLegenda(variavel, quebras) {
+  const cont = document.getElementById('coropleta-legenda');
+  if (!cont) return;
+  const info = COROPLETA_INFO[variavel] || { titulo: variavel, sufixo: '' };
+  const fmt = (x) => Math.round(x).toLocaleString('pt-PT');
+  let linhas = '';
+  for (let i = 0; i < COROPLETA_CORES.length; i++) {
+    let intervalo;
+    if (i === 0) intervalo = `&lt; ${fmt(quebras[0])}${info.sufixo}`;
+    else if (i === COROPLETA_CORES.length - 1) intervalo = `&ge; ${fmt(quebras[quebras.length - 1])}${info.sufixo}`;
+    else intervalo = `${fmt(quebras[i - 1])} – ${fmt(quebras[i])}${info.sufixo}`;
+    linhas += `<div class="cl-item"><span class="cl-cor" style="background:${COROPLETA_CORES[i]}"></span>${intervalo}</div>`;
+  }
+  cont.innerHTML = `<div class="cl-titulo">${escaparHtml(info.titulo)}</div>${linhas}`;
+  cont.classList.remove('oculto');
+}
+
+// =====================================================================
+// COMPARADOR de freguesias
+// =====================================================================
+
+let comparaSel = [];
+let dadosComparar = [];
+let chartComparar = null;
+
+const LINHAS_COMP = [
+  ['Área (km²)', 'area_km2'],
+  ['População', 'populacao'],
+  ['Densidade (hab/km²)', 'densidade'],
+  ['Edifícios', 'edificios'],
+  ['Aloj. familiares', 'alojamentos'],
+  ['0-14 anos', 'jovens_0_14'],
+  ['15-24 anos', 'jovens_15_24'],
+  ['25-64 anos', 'adultos_25_64'],
+  ['65+ anos', 'idosos_65'],
+];
+const ROTULO_METRICA = {
+  populacao: 'População', densidade: 'Densidade (hab/km²)',
+  alojamentos: 'Aloj. familiares', edificios: 'Edifícios', area_km2: 'Área (km²)',
+};
+
+function ligarComparar() {
+  const add = document.getElementById('comparar-add');
+  add.addEventListener('change', () => {
+    const dt = add.value; add.value = '';
+    if (!dt || comparaSel.includes(dt)) return;
+    if (comparaSel.length >= 4) { toast('Máximo de quatro freguesias.', 'info'); return; }
+    comparaSel.push(dt);
+    renderChips();
+  });
+  document.getElementById('btn-comparar').addEventListener('click', executarComparar);
+  document.getElementById('comparar-metrica').addEventListener('change', () => { if (dadosComparar.length) desenharGraficoComparar(); });
+}
+
+function nomeFreguesia(dt) {
+  const f = listaFreguesias.find((x) => x.dtmnfr === dt);
+  return f ? f.freguesia : dt;
+}
+
+function renderChips() {
+  const cont = document.getElementById('comparar-chips');
+  cont.innerHTML = comparaSel.map((dt) =>
+    `<span class="chip" data-dt="${dt}">${escaparHtml(nomeFreguesia(dt))}<button aria-label="Remover">${ICO.fechar}</button></span>`
+  ).join('');
+  cont.querySelectorAll('.chip button').forEach((b) => {
+    b.addEventListener('click', () => {
+      comparaSel = comparaSel.filter((x) => x !== b.closest('.chip').dataset.dt);
+      renderChips();
+    });
+  });
+}
+
+async function executarComparar() {
+  if (comparaSel.length < 2) { toast('Escolhe pelo menos duas freguesias.', 'info'); return; }
+  const btn = document.getElementById('btn-comparar');
+  try {
+    carregarBotao(btn, true, 'A comparar…');
+    estadoBarra('a comparar freguesias…');
+    dadosComparar = await pedirJSON(`${CONFIG.API}/comparar?ids=${comparaSel.join(',')}`);
+    desenharTabelaComparar();
+    desenharGraficoComparar();
+    mostrar('comparar-resultado', true);
+    estadoBarra('pronto');
+  } catch (err) {
+    console.error('Erro ao comparar', err);
+    estadoBarra('erro na comparação');
+    toast(`Não foi possível comparar: ${err.message}`, 'erro');
+  } finally {
+    carregarBotao(btn, false);
+  }
+}
+
+function desenharTabelaComparar() {
+  const tab = document.getElementById('comparar-tabela');
+  const thead = '<tr><th>Indicador</th>' + dadosComparar.map((d) => `<th>${escaparHtml(d.freguesia)}</th>`).join('') + '</tr>';
+  const linhas = LINHAS_COMP.map(([rotulo, chave]) => {
+    const cels = dadosComparar.map((d) => `<td class="mono">${formatarNumero(d[chave])}</td>`).join('');
+    return `<tr><td class="ind">${rotulo}</td>${cels}</tr>`;
+  }).join('');
+  tab.innerHTML = `<thead>${thead}</thead><tbody>${linhas}</tbody>`;
+}
+
+function desenharGraficoComparar() {
+  const metrica = document.getElementById('comparar-metrica').value;
+  const ctx = document.getElementById('grafico-comparar');
+  if (chartComparar) chartComparar.destroy();
+  const cores = ['#e3a857', '#58c4c4', '#6ea8e6', '#5cc98a'];
+  chartComparar = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: dadosComparar.map((d) => d.freguesia),
+      datasets: [{
+        label: ROTULO_METRICA[metrica] || metrica,
+        data: dadosComparar.map((d) => Number(d[metrica])),
+        backgroundColor: dadosComparar.map((_, i) => cores[i % cores.length]),
+        borderRadius: 5, borderSkipped: false, maxBarThickness: 60,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: tooltipTema() },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: COR.bruma, font: { size: 10 } } },
+        y: { beginAtZero: true, grid: { color: COR.linha }, ticks: { color: COR.nevoa, font: { family: 'JetBrains Mono', size: 10 } } },
+      },
+    },
+  });
+}
+
+
 function ligarAbas() {
   document.querySelectorAll('.aba').forEach((btn) => {
     btn.addEventListener('click', () => ativarAba(btn.dataset.aba));
@@ -779,6 +1415,7 @@ function ativarAba(nome) {
 
 function ligarBotoesAnalise() {
   document.getElementById('btn-ver-dem').addEventListener('click', verRelevoFreguesia);
+  document.getElementById('btn-ver-declive').addEventListener('click', verDecliveFreguesia);
 
   document.getElementById('btn-desenhar-area').addEventListener('click', iniciarDesenhoArea);
   document.getElementById('btn-limpar-area').addEventListener('click', limparArea);
@@ -790,7 +1427,10 @@ function ligarBotoesAnalise() {
   document.getElementById('btn-exportar').addEventListener('click', exportarElegivel);
 
   map.on(L.Draw.Event.CREATED, () => {
+    const eraMedir = (tipoDesenho === 'medir');
     desenhoAreaAtivo = null;
+    tipoDesenho = null;
+    if (eraMedir) return; // a medição de área já foi tratada no outro handler
     const ativa = document.querySelector('.aba.ativa');
     if (ativa?.dataset.aba === 'interseccao') executarInterseccao();
   });
@@ -798,10 +1438,14 @@ function ligarBotoesAnalise() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (medicaoAtiva) { cancelarMedicao(); toast('Medição cancelada.', 'info'); return; }
+    if (medicaoAtiva)         { cancelarMedicao(); toast('Medição cancelada.', 'info'); return; }
+    if (perfilAtivo)          { cancelarPerfil(); toast('Perfil cancelado.', 'info'); return; }
+    if (areaMedicaoAtiva)     { cancelarMedicaoArea(); toast('Medição de área cancelada.', 'info'); return; }
+    if (modoClique !== 'info') { activarModoClique('info'); toast('Ferramenta desativada.', 'info'); return; }
     if (desenhoAreaAtivo) {
       desenhoAreaAtivo.disable();
       desenhoAreaAtivo = null;
+      tipoDesenho = null;
       toast('Desenho cancelado.', 'info');
     }
   });

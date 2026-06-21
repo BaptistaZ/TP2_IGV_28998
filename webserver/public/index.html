@@ -56,6 +56,12 @@
       <button id="btn-medir" class="icon-btn" title="Medir distância no mapa" aria-label="Medir distância">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.3 15.3-6 6a1 1 0 0 1-1.4 0l-12-12a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.4 0l12 12a1 1 0 0 1 0 1.4Z"/><path d="m8 8 1.5 1.5M11 5l1.5 1.5M14 8l1.5 1.5M5 11l1.5 1.5"/></svg>
       </button>
+      <button id="btn-medir-area" class="icon-btn" title="Medir área no mapa" aria-label="Medir área">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3zM3 14h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7z" opacity=".5"/><path d="M3 12h18M12 3v18"/></svg>
+      </button>
+      <button id="btn-perfil" class="icon-btn" title="Perfil de elevação ao longo de uma linha" aria-label="Perfil de elevação">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17 9 7l4 6 3-4 5 8z"/><path d="M3 21h18"/></svg>
+      </button>
       <button id="btn-cheio" class="icon-btn" title="Ecrã inteiro do mapa" aria-label="Ecrã inteiro">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
       </button>
@@ -90,6 +96,23 @@
         </section>
 
         <section class="bloco">
+          <h3 class="bloco-titulo">Coropleta de freguesias</h3>
+          <label class="campo" style="margin:6px 0 0">
+            <span class="seletor">
+              <select id="select-coropleta" aria-label="Variável da coropleta">
+                <option value="">Sem coropleta</option>
+                <option value="populacao">População</option>
+                <option value="densidade">Densidade (hab/km²)</option>
+                <option value="idosos_pct">Índice de envelhecimento (%)</option>
+                <option value="edificios">Edifícios</option>
+                <option value="alojamentos">Alojamentos familiares</option>
+              </select>
+            </span>
+          </label>
+          <div id="coropleta-legenda" class="coropleta-legenda oculto"></div>
+        </section>
+
+        <section class="bloco">
           <h3 class="bloco-titulo">Legenda</h3>
           <div id="legenda" class="legenda"><!-- preenchido por JS --></div>
         </section>
@@ -109,16 +132,24 @@
         <h2>Análise espacial</h2>
       </div>
 
-      <nav class="abas" role="tablist" aria-label="Modos de análise">
-        <button class="aba ativa" data-aba="consulta" role="tab" aria-selected="true">
+      <nav class="abas abas-5" role="tablist" aria-label="Modos de análise">
+        <button class="aba ativa" data-aba="consulta" role="tab" aria-selected="true" title="Consulta de freguesia">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           Consulta
         </button>
-        <button class="aba" data-aba="interseccao" role="tab" aria-selected="false">
+        <button class="aba" data-aba="comparar" role="tab" aria-selected="false" title="Comparar freguesias">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="9" width="3" height="9"/><rect x="13" y="5" width="3" height="13"/></svg>
+          Comparar
+        </button>
+        <button class="aba" data-aba="proximidade" role="tab" aria-selected="false" title="Proximidade e influência">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8" opacity=".5"/></svg>
+          Proximidade
+        </button>
+        <button class="aba" data-aba="interseccao" role="tab" aria-selected="false" title="Interseção por área">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6"/><circle cx="15" cy="15" r="6"/></svg>
           Interseção
         </button>
-        <button class="aba" data-aba="criterios" role="tab" aria-selected="false">
+        <button class="aba" data-aba="criterios" role="tab" aria-selected="false" title="Análise por critérios">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M7 12h10M11 18h2"/></svg>
           Critérios
         </button>
@@ -170,10 +201,101 @@
           </h4>
           <div class="grafico-cx"><canvas id="grafico-etaria" height="160"></canvas></div>
 
-          <button id="btn-ver-dem" class="btn btn-sec largo" style="margin-top:14px">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 20 6-10 4 6 3-4 5 8z"/></svg>
-            Ver relevo no mapa
-          </button>
+          <div class="botoes" style="margin-top:14px">
+            <button id="btn-ver-dem" class="btn btn-sec">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 20 6-10 4 6 3-4 5 8z"/></svg>
+              Ver relevo
+            </button>
+            <button id="btn-ver-declive" class="btn btn-sec">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18L3 4z"/></svg>
+              Ver declive
+            </button>
+          </div>
+          <div id="declive-stats" class="cartoes oculto" style="margin-top:10px">
+            <div class="cartao mini"><span class="valor mono" id="kpi-declive-max">·</span><span class="rotulo">Declive máx.</span></div>
+            <div class="cartao mini"><span class="valor mono" id="kpi-declive-media">·</span><span class="rotulo">Declive médio</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="conteudo-aba" id="aba-comparar" role="tabpanel">
+        <p class="ajuda">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Escolhe até quatro freguesias para comparar os indicadores lado a lado.</span>
+        </p>
+
+        <label class="campo">
+          <span class="et">Adicionar freguesia</span>
+          <span class="seletor">
+            <select id="comparar-add" aria-label="Adicionar freguesia à comparação">
+              <option value="">Escolher freguesia…</option>
+            </select>
+          </span>
+        </label>
+
+        <div id="comparar-chips" class="chips"></div>
+
+        <button id="btn-comparar" class="btn btn-pri largo" style="margin-top:12px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="9" width="3" height="9"/><rect x="13" y="5" width="3" height="13"/></svg>
+          Comparar
+        </button>
+
+        <div id="comparar-resultado" class="resultado oculto">
+          <label class="campo" style="margin-top:14px">
+            <span class="et">Indicador no gráfico</span>
+            <span class="seletor">
+              <select id="comparar-metrica" aria-label="Indicador a representar">
+                <option value="populacao">População</option>
+                <option value="densidade">Densidade (hab/km²)</option>
+                <option value="alojamentos">Alojamentos familiares</option>
+                <option value="edificios">Edifícios</option>
+                <option value="area_km2">Área (km²)</option>
+              </select>
+            </span>
+          </label>
+          <div class="grafico-cx"><canvas id="grafico-comparar" height="170"></canvas></div>
+          <div class="tabela-cx"><table id="comparar-tabela" class="tab-comp"></table></div>
+        </div>
+      </section>
+
+      <section class="conteudo-aba" id="aba-proximidade" role="tabpanel">
+        <p class="ajuda">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Ativa uma ferramenta e clica no mapa para a usar a partir desse ponto.</span>
+        </p>
+
+        <div class="divisor">Alojamentos mais próximos</div>
+        <label class="campo">
+          <span class="et">Quantos <span class="num"><span id="lbl-knn">5</span></span></span>
+          <div class="range-linha">
+            <input type="range" id="rng-knn" min="1" max="15" step="1" value="5" aria-label="Número de alojamentos mais próximos" />
+          </div>
+        </label>
+        <button id="btn-knn" class="btn btn-sec largo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+          Ativar e clicar no mapa
+        </button>
+        <div id="knn-resultado" class="resultado oculto">
+          <div class="lista-prox" id="knn-lista"></div>
+        </div>
+
+        <div class="divisor">Área de influência (buffer)</div>
+        <label class="campo">
+          <span class="et">Raio <span class="num"><span id="lbl-raio">500</span> m</span></span>
+          <div class="range-linha">
+            <input type="range" id="rng-raio" min="100" max="3000" step="50" value="500" aria-label="Raio da área de influência" />
+          </div>
+        </label>
+        <button id="btn-buffer" class="btn btn-sec largo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity=".5"/><circle cx="12" cy="12" r="2.5"/></svg>
+          Ativar e clicar no mapa
+        </button>
+        <div id="buffer-resultado" class="resultado oculto">
+          <div class="cartao destaque">
+            <span class="valor mono" id="buffer-conta">·</span>
+            <span class="rotulo">Alojamentos locais no raio</span>
+          </div>
+          <div class="lista-prox" id="buffer-lista"></div>
         </div>
       </section>
 
@@ -259,6 +381,18 @@
         <label class="campo">
           <div class="range-linha">
             <input type="range" id="rng-dist" min="100" max="2000" step="50" value="500" aria-label="Distância máxima a alojamento local" />
+          </div>
+        </label>
+
+        <label class="campo-check">
+          <input type="checkbox" id="chk-declive" />
+          <span class="caixa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 6"/></svg></span>
+          <span class="texto">Declive até <strong><span id="lbl-declive">15</span>°</strong> (terreno aplanado)</span>
+        </label>
+
+        <label class="campo">
+          <div class="range-linha">
+            <input type="range" id="rng-declive" min="0" max="45" step="1" value="15" aria-label="Declive máximo em graus" />
           </div>
         </label>
 

@@ -241,56 +241,41 @@ class Database {
     return r.rows[0] || null;
   }
 
-  async analiseElegivel(geojsonGeometry, cotaMin, usarAl, distAl) {
+  async analiseElegivel(geojsonGeometry, cotaMin, usarAl, distAl, usarDeclive, decliveMax) {
     const geo = JSON.stringify(geojsonGeometry);
     const cota = Number(cotaMin);
     const dist = Number(distAl);
-    if (!Number.isFinite(cota) || !Number.isFinite(dist)) {
-      throw new Error('Parametros cotaMin/distAl invalidos');
+    const declive = Number(decliveMax);
+    if (!Number.isFinite(cota) || !Number.isFinite(dist) || !Number.isFinite(declive)) {
+      throw new Error('Parametros invalidos na analise de elegibilidade');
     }
 
-    const interseccaoBuffer = usarAl
-      ? `ST_Intersection(base.g, COALESCE((SELECT g FROM buffer_al), ST_GeomFromText('POLYGON EMPTY',3763)))`
-      : `base.g`;
+    // Constroi as CTEs apenas para os criterios ativos (evita calcular o
+    // declive quando nao e pedido). Os criterios sao combinados por intersecao.
+    const ctes = [
+      `area AS (SELECT ST_MakeValid(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($1),4326),3763)) AS g)`,
+      `clip AS (SELECT ST_Union(ST_Clip(r.rast, a.g, true)) AS rast FROM dem r, area a WHERE ST_Intersects(r.rast, a.g))`,
+      `zona_cota AS (SELECT ST_Union(dp.geom) AS g FROM clip, LATERAL ST_DumpAsPolygons(ST_MapAlgebra(clip.rast,1,'2BUI','CASE WHEN [rast.val] >= ${cota} THEN 1 ELSE 0 END')) AS dp WHERE dp.val = 1)`,
+    ];
+    if (usarDeclive) {
+      ctes.push(`zona_declive AS (SELECT ST_Union(dp.geom) AS g FROM clip, LATERAL ST_DumpAsPolygons(ST_MapAlgebra(ST_Slope(clip.rast,1,'32BF','DEGREES'),1,'2BUI','CASE WHEN [rast.val] <= ${declive} THEN 1 ELSE 0 END')) AS dp WHERE dp.val = 1)`);
+    }
+    if (usarAl) {
+      ctes.push(`zona_buffer AS (SELECT ST_Union(ST_Buffer(x.geom, $2)) AS g FROM alojamento_local x, area a WHERE ST_DWithin(x.geom, a.g, $2))`);
+    }
+    ctes.push(`base AS (SELECT ST_Intersection(COALESCE((SELECT g FROM zona_cota), ST_GeomFromText('POLYGON EMPTY',3763)), (SELECT g FROM area)) AS g)`);
 
-    const sql = `
-      WITH area AS (
-        SELECT ST_MakeValid(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($1),4326),3763)) AS g
-      ),
-      clip AS (
-        SELECT ST_Union(ST_Clip(r.rast, a.g, true)) AS rast
-        FROM dem r, area a
-        WHERE ST_Intersects(r.rast, a.g)
-      ),
-      zona_cota AS (
-        SELECT ST_Union(dp.geom) AS g
-        FROM clip,
-        LATERAL ST_DumpAsPolygons(
-          ST_MapAlgebra(clip.rast, 1, '2BUI',
-            'CASE WHEN [rast.val] >= ${cota} THEN 1 ELSE 0 END')
-        ) AS dp
-        WHERE dp.val = 1
-      ),
-      buffer_al AS (
-        SELECT ST_Union(ST_Buffer(x.geom, $2)) AS g
-        FROM alojamento_local x, area a
-        WHERE ST_DWithin(x.geom, a.g, $2)
-      ),
-      base AS (
-        SELECT ST_Intersection(
-                 COALESCE((SELECT g FROM zona_cota), ST_GeomFromText('POLYGON EMPTY',3763)),
-                 (SELECT g FROM area)
-               ) AS g
-      ),
-      eleg AS (
-        SELECT ST_CollectionExtract(ST_MakeValid(${interseccaoBuffer}), 3) AS g
-        FROM base
-      )
-      SELECT
-        round((ST_Area(g)/1e6)::numeric,3)   AS area_km2_elegivel,
-        ST_AsGeoJSON(ST_Transform(g,4326))   AS geojson
+    let expr = `(SELECT g FROM base)`;
+    if (usarDeclive) expr = `ST_Intersection(${expr}, COALESCE((SELECT g FROM zona_declive), ST_GeomFromText('POLYGON EMPTY',3763)))`;
+    if (usarAl)      expr = `ST_Intersection(${expr}, COALESCE((SELECT g FROM zona_buffer), ST_GeomFromText('POLYGON EMPTY',3763)))`;
+    ctes.push(`eleg AS (SELECT ST_CollectionExtract(ST_MakeValid(${expr}), 3) AS g)`);
+
+    const sql = `WITH ${ctes.join(',\n      ')}
+      SELECT round((ST_Area(g)/1e6)::numeric,3) AS area_km2_elegivel,
+             ST_AsGeoJSON(ST_Transform(g,4326)) AS geojson
       FROM eleg;`;
-    const r = await this.query(sql, [geo, dist]);
+    const params = usarAl ? [geo, dist] : [geo]; // $2 só existe quando o buffer é usado
+    const r = await this.query(sql, params);
     const row = r.rows[0] || { area_km2_elegivel: 0, geojson: null };
     return {
       area_km2_elegivel: row.area_km2_elegivel || 0,
@@ -318,6 +303,200 @@ class Database {
     if (r.rows.length === 0 || !r.rows[0].buffer) return null;
     return JSON.parse(r.rows[0].buffer);
   }
+
+  // ===================================================================
+  // FUNCIONALIDADES DE ANALISE ESPACIAL
+  // ===================================================================
+
+  // Executa uma query com os drivers GDAL ativos (necessario para
+  // ST_AsTIFF / ST_Slope, que escrevem raster). Usa SET LOCAL numa
+  // transacao, por isso funciona mesmo sem reconfigurar a base.
+  async queryComGdal(sql, params) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SET LOCAL postgis.gdal_enabled_drivers = 'ENABLE_ALL'");
+      const r = await client.query(sql, params);
+      await client.query('COMMIT');
+      return r;
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // 1) Perfil de elevacao ao longo de uma linha (amostra n pontos do DEM)
+  async getPerfilElevacao(lineGeoJSON, n) {
+    const geo = JSON.stringify(lineGeoJSON);
+    const amostras = Math.max(2, Math.min(300, parseInt(n, 10) || 100));
+    const sql = `
+      WITH linha AS (
+        SELECT ST_MakeValid(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($1),4326),3763)) AS g
+      ),
+      comprimento AS (SELECT ST_Length(g) AS c FROM linha),
+      pontos AS (
+        SELECT i,
+               ST_LineInterpolatePoint(l.g, i::float / ($2 - 1)) AS pt,
+               (SELECT c FROM comprimento) * i::float / ($2 - 1) AS dist
+        FROM linha l, generate_series(0, $2 - 1) AS i
+      )
+      SELECT
+        round(p.dist::numeric, 1) AS dist,
+        (SELECT round(ST_Value(r.rast, p.pt)::numeric, 1)
+           FROM dem r WHERE ST_Intersects(r.rast, p.pt) LIMIT 1) AS cota
+      FROM pontos p
+      ORDER BY p.dist;`;
+    const r = await this.query(sql, [geo, amostras]);
+    const pontos = r.rows.map((x) => ({
+      dist: Number(x.dist),
+      cota: x.cota != null ? Number(x.cota) : null,
+    }));
+    const cotas = pontos.map((p) => p.cota).filter((v) => v != null);
+    return {
+      pontos,
+      comprimento_m: pontos.length ? pontos[pontos.length - 1].dist : 0,
+      cota_min: cotas.length ? Math.min(...cotas) : null,
+      cota_max: cotas.length ? Math.max(...cotas) : null,
+      ganho_m: ganhoAcumulado(cotas),
+    };
+  }
+
+  // 2) Alojamentos locais mais proximos de um ponto (KNN via operador <->)
+  async getAlMaisProximos(lon, lat, n) {
+    const k = Math.max(1, Math.min(20, parseInt(n, 10) || 5));
+    const sql = `
+      WITH p AS (
+        SELECT ST_Transform(ST_SetSRID(ST_MakePoint($1,$2),4326),3763) AS g
+      )
+      SELECT
+        ST_X(ST_Transform(al.geom,4326)) AS lon,
+        ST_Y(ST_Transform(al.geom,4326)) AS lat,
+        al.denominacao, al.modalidade, al.freguesia,
+        round(ST_Distance(al.geom, p.g)::numeric, 0) AS dist_m
+      FROM alojamento_local al, p
+      ORDER BY al.geom <-> p.g
+      LIMIT $3;`;
+    const r = await this.query(sql, [lon, lat, k]);
+    return r.rows.map((x) => ({
+      lon: Number(x.lon), lat: Number(x.lat),
+      denominacao: x.denominacao, modalidade: x.modalidade, freguesia: x.freguesia,
+      dist_m: Number(x.dist_m),
+    }));
+  }
+
+  // 5) Declive (graus) de uma freguesia, derivado do DEM, em GeoTIFF
+  async getFreguesiaDecliveTiff(dtmnfr) {
+    const sql = `
+      WITH fr AS (SELECT geom FROM freguesias WHERE dtmnfr = $1),
+      recorte AS (
+        SELECT ST_Union(ST_Clip(r.rast, fr.geom, true)) AS rast
+        FROM dem r, fr WHERE ST_Intersects(r.rast, fr.geom)
+      )
+      SELECT ST_AsTIFF(ST_Slope(rast, 1, '32BF', 'DEGREES')) AS tif
+      FROM recorte WHERE rast IS NOT NULL;`;
+    const r = await this.queryComGdal(sql, [dtmnfr]);
+    if (r.rows.length === 0 || !r.rows[0].tif) return null;
+    return r.rows[0].tif;
+  }
+
+  // Estatisticas de declive de uma freguesia (min/max/media em graus)
+  async getFreguesiaDecliveStats(dtmnfr) {
+    const sql = `
+      WITH fr AS (SELECT geom FROM freguesias WHERE dtmnfr = $1),
+      recorte AS (
+        SELECT ST_Union(ST_Clip(r.rast, fr.geom, true)) AS rast
+        FROM dem r, fr WHERE ST_Intersects(r.rast, fr.geom)
+      )
+      SELECT
+        round((s.stats).min::numeric, 1)  AS declive_min,
+        round((s.stats).max::numeric, 1)  AS declive_max,
+        round((s.stats).mean::numeric, 1) AS declive_media
+      FROM recorte, LATERAL (SELECT ST_SummaryStats(ST_Slope(rast,1,'32BF','DEGREES')) AS stats) s
+      WHERE rast IS NOT NULL;`;
+    const r = await this.queryComGdal(sql, [dtmnfr]);
+    return r.rows[0] || null;
+  }
+
+  // 6) Indicadores por freguesia (para a coropleta configuravel)
+  async getIndicadoresFreguesias() {
+    const sql = `
+      SELECT
+        f.dtmnfr, f.freguesia,
+        round((f.area_ha/100.0)::numeric, 2)                  AS area_km2,
+        COALESCE(SUM(s.n_individuos),0)                       AS populacao,
+        COALESCE(SUM(s.n_edificios_classicos),0)              AS edificios,
+        COALESCE(SUM(s.n_alojamentos_total),0)                AS alojamentos,
+        COALESCE(SUM(s.n_individuos_65_ou_mais),0)            AS idosos,
+        CASE WHEN SUM(s.n_individuos) > 0
+             THEN round(100.0*SUM(s.n_individuos_65_ou_mais)/SUM(s.n_individuos),1)
+             ELSE 0 END                                       AS idosos_pct,
+        CASE WHEN f.area_ha > 0
+             THEN round((COALESCE(SUM(s.n_individuos),0)/(f.area_ha/100.0))::numeric,1)
+             ELSE 0 END                                       AS densidade
+      FROM freguesias f
+      LEFT JOIN subseccoes s ON ST_Contains(f.geom, ST_PointOnSurface(s.geom))
+      GROUP BY f.dtmnfr, f.freguesia, f.area_ha
+      ORDER BY f.freguesia;`;
+    const r = await this.query(sql);
+    return r.rows.map((x) => ({
+      dtmnfr: x.dtmnfr, freguesia: x.freguesia,
+      area_km2: Number(x.area_km2),
+      populacao: Number(x.populacao),
+      edificios: Number(x.edificios),
+      alojamentos: Number(x.alojamentos),
+      idosos: Number(x.idosos),
+      idosos_pct: Number(x.idosos_pct),
+      densidade: Number(x.densidade),
+    }));
+  }
+
+  // 7) Comparar varias freguesias (indicadores lado a lado)
+  async compararFreguesias(ids) {
+    const sql = `
+      SELECT
+        f.dtmnfr, f.freguesia,
+        round((f.area_ha/100.0)::numeric, 2)       AS area_km2,
+        COALESCE(SUM(s.n_individuos),0)            AS populacao,
+        COALESCE(SUM(s.n_individuos_0_14),0)       AS jovens_0_14,
+        COALESCE(SUM(s.n_individuos_15_24),0)      AS jovens_15_24,
+        COALESCE(SUM(s.n_individuos_25_64),0)      AS adultos_25_64,
+        COALESCE(SUM(s.n_individuos_65_ou_mais),0) AS idosos_65,
+        COALESCE(SUM(s.n_edificios_classicos),0)   AS edificios,
+        COALESCE(SUM(s.n_alojamentos_total),0)     AS alojamentos,
+        CASE WHEN f.area_ha > 0
+             THEN round((COALESCE(SUM(s.n_individuos),0)/(f.area_ha/100.0))::numeric,1)
+             ELSE 0 END                            AS densidade
+      FROM freguesias f
+      LEFT JOIN subseccoes s ON ST_Contains(f.geom, ST_PointOnSurface(s.geom))
+      WHERE f.dtmnfr = ANY($1)
+      GROUP BY f.dtmnfr, f.freguesia, f.area_ha
+      ORDER BY f.freguesia;`;
+    const r = await this.query(sql, [ids]);
+    return r.rows.map((x) => ({
+      dtmnfr: x.dtmnfr, freguesia: x.freguesia,
+      area_km2: Number(x.area_km2),
+      populacao: Number(x.populacao),
+      jovens_0_14: Number(x.jovens_0_14),
+      jovens_15_24: Number(x.jovens_15_24),
+      adultos_25_64: Number(x.adultos_25_64),
+      idosos_65: Number(x.idosos_65),
+      edificios: Number(x.edificios),
+      alojamentos: Number(x.alojamentos),
+      densidade: Number(x.densidade),
+    }));
+  }
+}
+
+// Ganho de elevacao acumulado (soma das subidas) ao longo de um perfil
+function ganhoAcumulado(cotas) {
+  let ganho = 0;
+  for (let i = 1; i < cotas.length; i++) {
+    const d = cotas[i] - cotas[i - 1];
+    if (d > 0) ganho += d;
+  }
+  return Math.round(ganho);
 }
 
 module.exports = Database;

@@ -131,14 +131,19 @@ app.post('/api/analise/elegivel', async (req, res, next) => {
     }
     const cotaMin = numero(b.cota_min, 200);
     const distAl = numero(b.dist_al, 500);
+    const decliveMax = numero(b.declive_max, 15);
     const usarAl = b.usar_al !== false; // por defeito true
+    const usarDeclive = b.usar_declive === true; // por defeito false
     if (cotaMin < -100 || cotaMin > 3000) {
       return res.status(400).json({ erro: 'cota_min fora do intervalo aceitavel' });
     }
     if (distAl <= 0 || distAl > 5000) {
       return res.status(400).json({ erro: 'dist_al deve estar entre 1 e 5000 metros' });
     }
-    const resultado = await db.analiseElegivel(geometry, cotaMin, usarAl, distAl);
+    if (decliveMax < 0 || decliveMax > 90) {
+      return res.status(400).json({ erro: 'declive_max deve estar entre 0 e 90 graus' });
+    }
+    const resultado = await db.analiseElegivel(geometry, cotaMin, usarAl, distAl, usarDeclive, decliveMax);
     res.json(resultado);
   } catch (err) { next(err); }
 });
@@ -162,6 +167,86 @@ app.get('/api/subseccoes/:bgri/buffer', async (req, res, next) => {
     const buffer = await db.getBuffer(bgri, dist);
     if (!buffer) return res.status(404).json({ erro: 'Subseccao nao encontrada' });
     res.json(buffer);
+  } catch (err) { next(err); }
+});
+
+// ---- Funcionalidades de analise espacial ----
+
+// Perfil de elevacao ao longo de uma linha desenhada
+app.post('/api/perfil-elevacao', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const geometry = b.geometry;
+    if (!geometry || geometry.type !== 'LineString') {
+      return res.status(400).json({ erro: 'Falta uma geometria LineString (GeoJSON) no corpo do pedido' });
+    }
+    const n = numero(b.n, 120);
+    res.json(await db.getPerfilElevacao(geometry, n));
+  } catch (err) { next(err); }
+});
+
+// Alojamentos locais mais proximos de um ponto (KNN)
+app.get('/api/al/mais-proximos', async (req, res, next) => {
+  try {
+    const lon = numero(req.query.lng, NaN);
+    const lat = numero(req.query.lat, NaN);
+    const n = numero(req.query.n, 5);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+      return res.status(400).json({ erro: 'Parametros lat e lng sao obrigatorios' });
+    }
+    res.json(await db.getAlMaisProximos(lon, lat, n));
+  } catch (err) { next(err); }
+});
+
+// Declive (graus) de uma freguesia, derivado do DEM, em GeoTIFF
+app.get('/api/freguesias/:dtmnfr/declive.tif', async (req, res, next) => {
+  try {
+    const dtmnfr = req.params.dtmnfr;
+    if (!/^\d{6}$/.test(dtmnfr)) {
+      return res.status(400).json({ erro: 'dtmnfr deve ter 6 digitos' });
+    }
+    const tif = await db.getFreguesiaDecliveTiff(dtmnfr);
+    if (!tif) return res.status(404).json({ erro: 'Declive nao disponivel para a freguesia' });
+    res.setHeader('Content-Type', 'image/tiff');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(tif);
+  } catch (err) { next(err); }
+});
+
+// Estatisticas de declive de uma freguesia
+app.get('/api/freguesias/:dtmnfr/declive', async (req, res, next) => {
+  try {
+    const dtmnfr = req.params.dtmnfr;
+    if (!/^\d{6}$/.test(dtmnfr)) {
+      return res.status(400).json({ erro: 'dtmnfr deve ter 6 digitos' });
+    }
+    const stats = await db.getFreguesiaDecliveStats(dtmnfr);
+    if (!stats) return res.status(404).json({ erro: 'Sem dados de declive para esta freguesia' });
+    res.json(stats);
+  } catch (err) { next(err); }
+});
+
+// Indicadores por freguesia (coropleta configuravel)
+app.get('/api/indicadores', async (req, res, next) => {
+  try {
+    res.json(await db.getIndicadoresFreguesias());
+  } catch (err) { next(err); }
+});
+
+// Comparar varias freguesias (lista de dtmnfr separada por virgulas)
+app.get('/api/comparar', async (req, res, next) => {
+  try {
+    const ids = String(req.query.ids || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (ids.length === 0) {
+      return res.status(400).json({ erro: 'Indica pelo menos um dtmnfr no parametro ids' });
+    }
+    if (ids.some((id) => !/^\d{6}$/.test(id))) {
+      return res.status(400).json({ erro: 'Todos os dtmnfr devem ter 6 digitos' });
+    }
+    if (ids.length > 6) {
+      return res.status(400).json({ erro: 'Maximo de 6 freguesias para comparar' });
+    }
+    res.json(await db.compararFreguesias(ids));
   } catch (err) { next(err); }
 });
 

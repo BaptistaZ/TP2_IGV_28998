@@ -223,6 +223,14 @@ function mostrarPerfil(r) {
   });
 }
 
+function perfilTemResultadoVisivel() {
+  return Boolean(
+    (perfilLinha && map.hasLayer(perfilLinha)) ||
+    (perfilMarcadores && map.hasLayer(perfilMarcadores)) ||
+    (perfilDlg && !perfilDlg.classList.contains('oculto'))
+  );
+}
+
 function fecharPerfil() {
   if (perfilDlg) perfilDlg.classList.add('oculto');
   limparPerfil();

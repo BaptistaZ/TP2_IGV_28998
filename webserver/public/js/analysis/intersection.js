@@ -19,7 +19,15 @@ async function executarInterseccao() {
     txt('ia-cota-max', r.cota_max != null ? r.cota_max + ' m' : '·');
     txt('ia-cota-min', r.cota_min != null ? r.cota_min + ' m' : '·');
     txt('ia-cota-media', r.cota_media != null ? r.cota_media + ' m' : '·');
-    txt('ia-freguesias', (r.freguesias && r.freguesias.length) ? r.freguesias.join(', ') : '·');
+    const freguesiasEl = document.getElementById('ia-freguesias');
+
+    if (r.freguesias && r.freguesias.length) {
+      freguesiasEl.innerHTML = r.freguesias
+        .map((nome) => `<span class="freg-chip">${escaparHtml(nome)}</span>`)
+        .join('');
+    } else {
+      freguesiasEl.textContent = '·';
+    }
 
     desenharGraficoModalidade(r.alojamentos_por_modalidade || []);
 

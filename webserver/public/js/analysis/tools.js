@@ -22,6 +22,12 @@ function ligarFerramentasMapa() {
       return;
     }
 
+    if (perfilTemResultadoVisivel()) {
+      fecharPerfil();
+      estadoBarra('pronto');
+      return;
+    }
+
     iniciarPerfil();
   });
 }

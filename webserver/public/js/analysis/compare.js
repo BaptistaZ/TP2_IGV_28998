@@ -59,15 +59,27 @@ function nomeFreguesia(dt) {
 function renderChips() {
   const cont = document.getElementById('comparar-chips');
 
-  // Renderiza as freguesias selecionadas como chips removíveis.
   cont.innerHTML = comparaSel.map((dt) =>
     `<span class="chip" data-dt="${dt}">${escaparHtml(nomeFreguesia(dt))}<button aria-label="Remover">${ICO.fechar}</button></span>`
   ).join('');
 
   cont.querySelectorAll('.chip button').forEach((b) => {
-    b.addEventListener('click', () => {
+    b.addEventListener('click', async () => {
       comparaSel = comparaSel.filter((x) => x !== b.closest('.chip').dataset.dt);
       renderChips();
+
+      if (!dadosComparar.length) return;
+
+      if (comparaSel.length >= 2) {
+        await executarComparar();
+      } else {
+        dadosComparar = [];
+        if (chartComparar) {
+          chartComparar.destroy();
+          chartComparar = null;
+        }
+        mostrar('comparar-resultado', false);
+      }
     });
   });
 }
